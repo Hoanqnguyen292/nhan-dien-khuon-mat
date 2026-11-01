@@ -47,7 +47,7 @@
 #include <esp_heap_caps.h>
 
 // ============================== CAU HINH ====================================
-#define FW_VERSION        "2026-11-01-cyd13"
+#define FW_VERSION        "2026-11-01-cyd14"
 
 #define CYD_SELFTEST      1    // 1 = tu chay self-test luc boot (~2.5s)
 
@@ -496,8 +496,11 @@ static void drawBlock(int32_t x, int32_t y, int32_t stride,
   }
 }
 
-// Bo dem tam cho 1 khoi MCU (toi da 16x16 = 256 pixel)
-static uint16_t mcuTmp[16 * 16];
+// Bo dem tam cho 1 DONG anh (man hinh rong toi da 320 px).
+// LUU Y: JPEGDEC (ban nay) tra ve khoi dang DAI NGANG rong bang ca anh va cao
+// vai dong (do duoc: stride=320 w=320 h=4), KHONG phai khoi 16x16. Vi vay
+// phai xu ly theo TUNG DONG, chia se 1 bo dem nho.
+static uint16_t rowTmp[320];
 
 static int drawMCUs(JPEGDRAW *pDraw) {
   const int32_t stride = pDraw->iWidth;
@@ -506,53 +509,32 @@ static int drawMCUs(JPEGDRAW *pDraw) {
   if (stride <= 0 || w <= 0 || h <= 0) return 1;
   if (w > stride) w = stride;
 
-  // Khong xoay/lat, hoac khoi to hon du kien: ve thang
-  if (g_imgRot == 0 || w > 16 || h > 16 || imgOutW <= 0 || imgOutH <= 0) {
-    static uint8_t dbgFlat = 0;
-    if (dbgFlat < 3) {
-      ++dbgFlat;
-      Serial.printf("[IMG] block x=%d y=%d stride=%d w=%d h=%d rot=%u -> VE THANG (out=%dx%d)\n",
-                    (int)pDraw->x, (int)pDraw->y, (int)stride, (int)w, (int)h,
-                    (unsigned)g_imgRot, (int)imgOutW, (int)imgOutH);
-    }
+  // Khong xoay/lat, hoac khoi rong hon bo dem tam: ve thang
+  if (g_imgRot == 0 || w > 320 || imgOutW <= 0 || imgOutH <= 0) {
     drawBlock(pDraw->x, pDraw->y, stride, w, h, pDraw->pPixels);
     return 1;
   }
 
-  static uint8_t dbgRot = 0;
-  if (dbgRot < 3) {
-    ++dbgRot;
-    Serial.printf("[IMG] block x=%d y=%d stride=%d w=%d h=%d rot=%u -> XOAY/LAT (out=%dx%d)\n",
-                  (int)pDraw->x, (int)pDraw->y, (int)stride, (int)w, (int)h,
-                  (unsigned)g_imgRot, (int)imgOutW, (int)imgOutH);
-  }
-
-  // Vi tri khoi sau khi xoay/lat (trong khung anh goc)
-  int32_t tx = pDraw->x;
-  int32_t ty = pDraw->y;
-  if (g_imgRot == 1)      { tx = imgOutW - pDraw->x - w; ty = imgOutH - pDraw->y - h; }
-  else if (g_imgRot == 2) { tx = imgOutW - pDraw->x - w; }
-  else if (g_imgRot == 3) { ty = imgOutH - pDraw->y - h; }
-  if (tx < 0 || ty < 0) return 1;
-
+  const int32_t bx = pDraw->x;
+  const int32_t by = pDraw->y;
+  const bool revC = (g_imgRot == 1 || g_imgRot == 2);   // lat truc ngang
+  const bool revR = (g_imgRot == 1 || g_imgRot == 3);   // lat truc doc
   const uint16_t *src = pDraw->pPixels;
-  for (int32_t r = 0; r < h; ++r) {
-    const int32_t sr = (g_imgRot == 1 || g_imgRot == 3) ? (h - 1 - r) : r;
-    uint16_t *dst = mcuTmp + (size_t)r * 16;
-    for (int32_t c = 0; c < w; ++c) {
-      const int32_t sc = (g_imgRot == 1 || g_imgRot == 2) ? (w - 1 - c) : c;
-      dst[c] = src[(size_t)sr * stride + sc];
-    }
-  }
 
-  // Khoi rong dung 16 pixel -> du lieu lien tuc trong mcuTmp -> ve 1 lan
-  if (w == 16) {
-    tft.pushImage(tx + drawOffX, ty + drawOffY, 16, h, mcuTmp);
-  } else {
-    for (int32_t r = 0; r < h; ++r) {
-      tft.pushImage(tx + drawOffX, ty + r + drawOffY, w, 1,
-                    mcuTmp + (size_t)r * 16);
+  for (int32_t r = 0; r < h; ++r) {
+    const uint16_t *srow = src + (size_t)r * stride;
+
+    // Tao 1 dong dich (dao chieu ngang neu can)
+    if (revC) {
+      for (int32_t c = 0; c < w; ++c) rowTmp[w - 1 - c] = srow[c];
+    } else {
+      for (int32_t c = 0; c < w; ++c) rowTmp[c] = srow[c];
     }
+
+    const int32_t dy = revR ? (imgOutH - 1 - (by + r)) : (by + r);
+    const int32_t dx = revC ? (imgOutW - bx - w) : bx;
+    if (dy < 0 || dy >= LCD_H || dx + w <= 0 || dx >= LCD_W) continue;
+    tft.pushImage(dx + drawOffX, dy + drawOffY, w, 1, rowTmp);
   }
   return 1;
 }
