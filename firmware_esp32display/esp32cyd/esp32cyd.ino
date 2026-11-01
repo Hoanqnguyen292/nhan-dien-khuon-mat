@@ -47,7 +47,7 @@
 #include <esp_heap_caps.h>
 
 // ============================== CAU HINH ====================================
-#define FW_VERSION        "2026-10-30-cyd12"
+#define FW_VERSION        "2026-11-01-cyd13"
 
 #define CYD_SELFTEST      1    // 1 = tu chay self-test luc boot (~2.5s)
 
@@ -508,8 +508,23 @@ static int drawMCUs(JPEGDRAW *pDraw) {
 
   // Khong xoay/lat, hoac khoi to hon du kien: ve thang
   if (g_imgRot == 0 || w > 16 || h > 16 || imgOutW <= 0 || imgOutH <= 0) {
+    static uint8_t dbgFlat = 0;
+    if (dbgFlat < 3) {
+      ++dbgFlat;
+      Serial.printf("[IMG] block x=%d y=%d stride=%d w=%d h=%d rot=%u -> VE THANG (out=%dx%d)\n",
+                    (int)pDraw->x, (int)pDraw->y, (int)stride, (int)w, (int)h,
+                    (unsigned)g_imgRot, (int)imgOutW, (int)imgOutH);
+    }
     drawBlock(pDraw->x, pDraw->y, stride, w, h, pDraw->pPixels);
     return 1;
+  }
+
+  static uint8_t dbgRot = 0;
+  if (dbgRot < 3) {
+    ++dbgRot;
+    Serial.printf("[IMG] block x=%d y=%d stride=%d w=%d h=%d rot=%u -> XOAY/LAT (out=%dx%d)\n",
+                  (int)pDraw->x, (int)pDraw->y, (int)stride, (int)w, (int)h,
+                  (unsigned)g_imgRot, (int)imgOutW, (int)imgOutH);
   }
 
   // Vi tri khoi sau khi xoay/lat (trong khung anh goc)
@@ -1044,6 +1059,9 @@ static void printStats() {
                 (unsigned)lastDecodeMs);
   Serial.printf("[STATS] scanning=%d paused=%d jpegCap=%u\n",
                 (int)scanning, (int)manualPaused, (unsigned)jpegCap);
+  Serial.printf("[STATS] imgrot=%u (%s) rot=%u %dx%d\n",
+                (unsigned)g_imgRot, imgRotName(g_imgRot),
+                (unsigned)g_rotation, tft.width(), tft.height());
 }
 
 static void handleSerialLine(char *line) {
@@ -1172,11 +1190,15 @@ static void handleSerialLine(char *line) {
     prefs.putUChar("irot", r);
     Serial.printf("[IMG] Da luu: %u = %s (chi tren CYD, CAM khong doi)\n",
                   (unsigned)r, imgRotName(r));
-    // Ve lai ngay khung hinh dang giu trong bo dem (neu co) de thay ket qua
+    // Phan hoi NGAY tren man hinh: ve lai khung hinh dang giu (neu co), neu
+    // khong co thi hien trang thong bao che do dang chon.
     if (lastFrameBytes > 0 && showJpeg(lastFrameBytes)) {
       drawOverlay();
-    } else if (!scanning) {
-      drawStandbyPage();
+    } else {
+      char b[48];
+      snprintf(b, sizeof(b), "%u = %s", (unsigned)r, imgRotName(r));
+      drawStatusPage("XOAY HINH CAMERA", b, TFT_CYAN);
+      standbyShown = false;
     }
     return;
   }
