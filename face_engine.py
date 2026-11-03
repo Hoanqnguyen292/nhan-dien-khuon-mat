@@ -59,6 +59,9 @@ DEFAULTS = {
     "recognize_blur_min": 15.0,   # độ nét Laplacian tối thiểu của vùng mặt
     "sample_dedup": 0.12,         # bỏ mẫu gần trùng mẫu đã có
     "augment_flip": True,         # lưu thêm bản lật ngang cho mỗi mẫu
+    # Cân bằng sáng (CLAHE) trước khi trích đặc trưng: giúp nhận diện ổn định khi
+    # ánh sáng đổi (tối/sáng, ngược sáng). 0 = tắt (quay lại hành vi cũ).
+    "light_norm": True,
     "track_enabled": True,
     "track_backend": "medianflow",  # medianflow | kcf | csrt | none
     "track_confirm": 3,           # số khung liên tiếp khớp mới chốt tên
@@ -208,6 +211,43 @@ def _as_sface_input(img: np.ndarray) -> np.ndarray:
     if img.shape[:2] != SFACE_SIZE:
         img = cv2.resize(img, SFACE_SIZE, interpolation=cv2.INTER_LINEAR)
     return np.ascontiguousarray(img[:, :, :3])
+
+
+# --- Cân bằng sáng (giảm phụ thuộc ánh sáng) --------------------------------
+# CLAHE trên kênh L của LAB: tăng tương phản CỤC BỘ, giữ nguyên màu. Ảnh mẫu lúc
+# đăng ký, ảnh lúc nhận diện và ảnh nạp lại từ đĩa đều đi qua hàm này nên vector
+# đặc trưng SFace nhất quán -> cùng một người vẫn khớp khi ánh sáng thay đổi.
+_CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
+
+def normalize_light(img: np.ndarray, enable: bool = True) -> np.ndarray:
+    """Chuẩn hoá ánh sáng trước khi trích đặc trưng (trả nguyên ảnh nếu tắt)."""
+    if not enable or img is None or getattr(img, "size", 0) == 0:
+        return img
+    out = img
+    if out.ndim == 2:
+        out = cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
+    lab = cv2.cvtColor(out, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    l = _CLAHE.apply(l)
+    return cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
+
+
+def _sharpness(gray: np.ndarray) -> float:
+    """Độ nét = phương sai Laplacian, ĐÃ cân bằng sáng.
+
+    Ảnh chụp trong lớp thiếu sáng có phương sai thấp một cách GIẢ TẠO. Nếu đo
+    trên ảnh gốc thì mặt đúng người vẫn bị coi nhầm là "mờ" -> bị loại trước khi
+    so khớp (đúng triệu chứng "đổi ánh sáng một chút là không nhận ra").
+    Cân bằng sáng trước khi đo để ngưỡng chỉ còn phản ánh độ NÉT thật.
+    """
+    if gray is None or getattr(gray, "size", 0) < 64:
+        return 0.0
+    try:
+        gray = cv2.equalizeHist(gray)
+    except cv2.error:
+        pass
+    return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
 
 # chữ / vẽ
@@ -399,6 +439,7 @@ class FaceMatcher:
         self._model_lock = threading.Lock()
         self._sf = None
         self._lbph = None
+        self.light_norm = bool(DEFAULTS["light_norm"])   # cân bằng sáng trước khi trích
         self.gallery = {}              # sid -> ndarray (n, 128) đã chuẩn hoá
         self.gallery_gray = {}         # sid -> list ảnh xám (đường LBPH)
         self.per_person = {}           # sid -> ngưỡng riêng
@@ -429,11 +470,16 @@ class FaceMatcher:
             return self._sf.alignCrop(bgr, row)
 
     def embed(self, aligned: np.ndarray) -> np.ndarray:
-        """Vector 128 chiều chuẩn hoá L2 (khoảng cách cosin = 1 - tích lượng)."""
+        """Vector 128 chiều chuẩn hoá L2 (khoảng cách cosin = 1 - tích lượng).
+
+        Ảnh được CÂN BẰNG SÁNG trước khi trích đặc trưng (nếu bật light_norm):
+        ảnh mẫu, ảnh nhận diện và ảnh nạp từ đĩa đều qua đây nên nhất quán.
+        """
         if self._sf is None:
             return None
+        img = normalize_light(aligned, self.light_norm)
         with self._model_lock:
-            f = self._sf.feature(aligned).flatten()
+            f = self._sf.feature(_as_sface_input(img)).flatten()
         return f / (np.linalg.norm(f) + 1e-9)
 
     def embed_frame(self, bgr, landmarks):
@@ -848,6 +894,9 @@ class FaceEngine:
             if key == "adaptive_threshold":
                 self.matcher.adaptive = new
                 need_retrain = True
+            elif key == "light_norm":
+                self.matcher.light_norm = bool(new)
+                need_retrain = True
             elif key == "detect_score":
                 self.detector.score_thresh = new
             elif key == "min_face_size":
@@ -913,7 +962,7 @@ class FaceEngine:
     def _blur_of(self, gray, box) -> float:
         x, y, w, h = (int(v) for v in box)
         crop = gray[max(0, y):y + h, max(0, x):x + w]
-        return float(cv2.Laplacian(crop, cv2.CV_64F).var()) if crop.size >= 64 else 0.0
+        return _sharpness(crop)
 
     def face_quality(self, frame, box):
         """(cạnh_px_quy_ve_640, độ_nét) của vùng mặt.
@@ -930,7 +979,7 @@ class FaceEngine:
         if crop.size < 64:
             return side, 0.0
         gray = crop if crop.ndim == 2 else cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        return side, float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        return side, _sharpness(gray)
 
     def _quality_reject(self, frame, box):
         """Lý do KHÔNG đủ tin cậy để chốt tên: "small" | "blur" | None (đạt)."""

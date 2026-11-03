@@ -137,6 +137,15 @@ SETTINGS = {
     "detect_score": _env_number("DETECT_SCORE", DEFAULTS["detect_score"]),
     "min_face_size": _env_number("MIN_FACE_SIZE", DEFAULTS["min_face_size"], int),
     "match_margin": _env_number("MATCH_MARGIN", DEFAULTS["match_margin"]),
+    # Cân bằng sáng (CLAHE) trước khi trích đặc trưng -> ổn định khi ánh sáng đổi
+    "light_norm": str(os.getenv("LIGHT_NORM", "1")).strip().lower()
+    not in ("0", "false", "no", "off"),
+    # Tự siết ngưỡng theo từng người (từ độ giống nhau giữa các mẫu của họ).
+    # Đặt 0 khi học sinh hay bị "không nhận ra": mẫu chụp cùng buổi thường gần
+    # trùng nhau -> ngưỡng riêng bị siết quá chặt, trong khi người lạ vốn đã
+    # cách rất xa (>=0.8) nên không cần siết.
+    "adaptive_threshold": str(os.getenv("ADAPTIVE_THRESHOLD", "1")).strip().lower()
+    not in ("0", "false", "no", "off"),
     "recognize_min_face": _env_number("RECOGNIZE_MIN_FACE",
                                       DEFAULTS["recognize_min_face"], int),
     "recognize_blur_min": _env_number("RECOGNIZE_BLUR_MIN",
@@ -173,6 +182,8 @@ engine.configure(
     detect_score=SETTINGS["detect_score"],
     min_face_size=SETTINGS["min_face_size"],
     match_margin=SETTINGS["match_margin"],
+    light_norm=SETTINGS["light_norm"],
+    adaptive_threshold=SETTINGS["adaptive_threshold"],
     recognize_min_face=SETTINGS["recognize_min_face"],
     recognize_blur_min=SETTINGS["recognize_blur_min"],
     track_confirm=SETTINGS["track_confirm"],

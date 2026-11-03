@@ -34,8 +34,8 @@ static void cfg_defaults(const char *def_ssid, const char *def_pass, const char 
   strlcpy(cfg.wifi_pass, def_pass_buf, sizeof(cfg.wifi_pass));
 
   cfg.use_static_ip = 0;
-  strlcpy(cfg.static_ip, "192.168.1.100", sizeof(cfg.static_ip));
-  strlcpy(cfg.static_gw, "192.168.1.1", sizeof(cfg.static_gw));
+  strlcpy(cfg.static_ip, "192.168.0.100", sizeof(cfg.static_ip));
+  strlcpy(cfg.static_gw, "192.168.0.1", sizeof(cfg.static_gw));
   strlcpy(cfg.static_mask, "255.255.255.0", sizeof(cfg.static_mask));
   strlcpy(cfg.static_dns, "8.8.8.8", sizeof(cfg.static_dns));
 
